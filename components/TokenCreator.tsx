@@ -37,10 +37,15 @@ const uploadToIPFS = async (file: File): Promise<string> => {
       body: formData
     })
     
-    if (!response.ok) throw new Error('Upload failed')
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+    
     const data = await response.json()
     return data.IpfsHash
+    
   } catch (error) {
+    console.error('Upload error:', error)
     throw new Error('Failed to upload to IPFS')
   }
 }
@@ -74,6 +79,7 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
   })
 
   const [realTokenAddress, setRealTokenAddress] = useState('')
+  const [imagePreview, setImagePreview] = useState('')
 
   const handleCreateToken = async () => {
     if (!connected || !publicKey || !signTransaction) {
@@ -86,8 +92,8 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
       return
     }
 
-    if (balance < 0.05) { // Updated fee for full creation
-      toast.error('Insufficient SOL balance (need ~0.05 SOL)')
+    if (balance < 0.015) {
+      toast.error('Insufficient SOL balance (need ~0.015 SOL)')
       return
     }
 
@@ -126,11 +132,6 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
       const decimals = parseInt(formData.decimals)
       const totalSupply = BigInt(formData.totalSupply)
       
-      // Calculate accurate fees
-      const mintRent = await connection.getMinimumBalanceForRentExemption(MINT_SIZE)
-      const associatedTokenRent = await connection.getMinimumBalanceForRentExemption(165)
-      const totalLamports = mintRent + associatedTokenRent + 5000 // Buffer for transaction fees
-      
       // Build complete transaction
       const transaction = new Transaction()
       
@@ -140,7 +141,7 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
           fromPubkey: publicKey,
           newAccountPubkey: mintKeypair.publicKey,
           space: MINT_SIZE,
-          lamports: mintRent,
+          lamports: await connection.getMinimumBalanceForRentExemption(MINT_SIZE),
           programId: TOKEN_PROGRAM_ID,
         })
       )
@@ -150,12 +151,12 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
         createInitializeMintInstruction(
           mintKeypair.publicKey,
           decimals,
-          publicKey, // mint authority
-          formData.revokeFreeze ? null : publicKey // freeze authority
+          publicKey,
+          formData.revokeFreeze ? null : publicKey
         )
       )
       
-      // 3. Create associated token account for user
+      // 3. Create associated token account
       const associatedTokenAccount = PublicKey.findProgramAddressSync(
         [
           publicKey.toBuffer(),
@@ -184,7 +185,7 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
         )
       )
       
-      // 5. Apply revokes as requested
+      // 5. Apply revokes
       if (formData.revokeMint) {
         transaction.add(
           createSetAuthorityInstruction(
@@ -221,8 +222,7 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
       setRealTokenAddress(mintKeypair.publicKey.toString())
       
       toast.success(`🎉 Token Created & Minted! 
-      Address: ${mintKeypair.publicKey.toString().slice(0, 8)}...
-      Tx: ${txid.slice(0, 8)}...`, { 
+      Address: ${mintKeypair.publicKey.toString().slice(0, 8)}...`, { 
         id: toastId,
         duration: 10000 
       })
@@ -260,10 +260,40 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
           <input type="number" placeholder="Decimals" value={formData.decimals} onChange={(e) => setFormData({ ...formData, decimals: e.target.value })} className="bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" min="0" max="9" />
         </div>
 
-        {/* Rest of form stays same... */}
-        
+        <h3 className="text-lg font-semibold mt-6">Social Links</h3>
+        <div className="space-y-3">
+          <input type="url" placeholder="Website URL" value={formData.website} onChange={(e) => setFormData({ ...formData, website: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Twitter URL" value={formData.twitter} onChange={(e) => setFormData({ ...formData, twitter: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Telegram URL" value={formData.telegram} onChange={(e) => setFormData({ ...formData, telegram: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Discord URL" value={formData.discord} onChange={(e) => setFormData({ ...formData, discord: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Extra Link" value={formData.extraLink} onChange={(e) => setFormData({ ...formData, extraLink: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+        </div>
+
+        <h3 className="text-lg font-semibold mt-6">Revoke Authorities</h3>
+        <div className="space-y-3">
+          <label className="flex items-center justify-between"><span>Revoke Freeze Authority</span><input type="checkbox" checked={formData.revokeFreeze} onChange={(e) => setFormData({ ...formData, revokeFreeze: e.target.checked })} className="w-5 h-5 rounded bg-purple-600" /></label>
+          <label className="flex items-center justify-between"><span>Revoke Update Authority</span><input type="checkbox" checked={formData.revokeUpdate} onChange={(e) => setFormData({ ...formData, revokeUpdate: e.target.checked })} className="w-5 h-5 rounded bg-purple-600" /></label>
+          <label className="flex items-center justify-between"><span>Revoke Mint Authority</span><input type="checkbox" checked={formData.revokeMint} onChange={(e) => setFormData({ ...formData, revokeMint: e.target.checked })} className="w-5 h-5 rounded bg-purple-600" /></label>
+        </div>
+
+        <h3 className="text-lg font-semibold mt-6">Dex Display Info (Fake)</h3>
+        <div className="space-y-3">
+          <input type="text" placeholder="Fake Creator Address" value={formData.fakeCreator} onChange={(e) => setFormData({ ...formData, fakeCreator: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="text" placeholder="Fake Token Address (add 'pump' at end)" value={formData.fakeTokenAddress} onChange={(e) => setFormData({ ...formData, fakeTokenAddress: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+        </div>
+
+        {realTokenAddress && (
+          <div className="mt-6 p-4 bg-dark-300 rounded-lg">
+            <h4 className="font-semibold mb-2">Real Token Address:</h4>
+            <div className="flex items-center gap-2">
+              <code className="text-sm break-all">{realTokenAddress}</code>
+              <button onClick={() => { navigator.clipboard.writeText(realTokenAddress); toast.success('Copied!'); }} className="px-3 py-1 bg-purple-600 rounded text-sm hover:bg-purple-700">Copy</button>
+            </div>
+          </div>
+        )}
+
         <div className="mt-8 flex items-center justify-between">
-          <div className="text-sm text-dark-400">Estimated fee: ~0.05 SOL</div>
+          <div className="text-sm text-dark-400">Estimated fee: ~0.015 SOL</div>
           <button onClick={handleCreateToken} disabled={loading || !connected} className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed">
             {loading ? 'Creating...' : 'Create & Mint Token'}
           </button>
