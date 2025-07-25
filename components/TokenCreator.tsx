@@ -7,8 +7,8 @@ import { createInitializeMintInstruction, TOKEN_PROGRAM_ID, MINT_SIZE } from '@s
 import toast from 'react-hot-toast'
 import ImageUpload from './ImageUpload'
 
-// ✅ BULLETPROOF IPFS UPLOAD USING PINATA
-const uploadToPinata = async (file: File): Promise<string> => {
+// ✅ WORKING IPFS UPLOAD (like Jupiter Launchpad uses)
+const uploadToIPFS = async (file: File): Promise<string> => {
   try {
     const formData = new FormData()
     formData.append('file', file)
@@ -21,13 +21,16 @@ const uploadToPinata = async (file: File): Promise<string> => {
       body: formData
     })
     
-    if (!response.ok) throw new Error('Pinata upload failed')
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
     
     const data = await response.json()
     return data.IpfsHash
+    
   } catch (error) {
-    console.error('Upload failed:', error)
-    throw error
+    console.error('Upload error:', error)
+    throw new Error('Failed to upload to IPFS. Please check your Pinata JWT.')
   }
 }
 
@@ -78,21 +81,21 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
     }
 
     setLoading(true)
-    let toastId = toast.loading('📤 Uploading to IPFS...')
+    let toastId = toast.loading('🚀 Starting token creation...')
 
     try {
-      // 🎯 STEP 1: Upload logo to Pinata
-      const logoCid = await uploadToPinata(formData.logo)
-      const logoUrl = `https://gateway.pinata.cloud/ipfs/${logoCid}`
-
-      // 🎯 STEP 2: Create metadata JSON
+      // 📸 Upload logo
+      toast.loading('📤 Uploading logo to IPFS...', { id: toastId })
+      const logoCid = await uploadToIPFS(formData.logo)
+      
+      // 📋 Create metadata (like Pump.fun format)
       const metadata = {
         name: formData.name,
         symbol: formData.symbol,
         description: formData.description,
-        image: logoUrl,
-        properties: {
-          website: formData.website,
+        image: `https://gateway.pinata.cloud/ipfs/${logoCid}`,
+        external_url: formData.website,
+        socials: {
           twitter: formData.twitter,
           telegram: formData.telegram,
           discord: formData.discord,
@@ -100,18 +103,17 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
         }
       }
 
-      // 🎯 STEP 3: Upload metadata JSON to Pinata
+      // 📤 Upload metadata
+      toast.loading('📋 Uploading metadata...', { id: toastId })
       const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json' })
       const metadataFile = new File([metadataBlob], 'metadata.json', { type: 'application/json' })
-      const metadataCid = await uploadToPinata(metadataFile)
+      const metadataCid = await uploadToIPFS(metadataFile)
       const metadataUrl = `https://gateway.pinata.cloud/ipfs/${metadataCid}`
 
-      toast.loading('⚡ Creating token on Solana...', { id: toastId })
-
-      // 🎯 STEP 4: Create the actual token
+      // ⚡ Create token on Solana
+      toast.loading('⚡ Creating on Solana...', { id: toastId })
       const connection = new Connection(process.env.NEXT_PUBLIC_RPC_URL!)
       
-      // Create mint account
       const mintKeypair = Keypair.generate()
       const lamports = await connection.getMinimumBalanceForRentExemption(MINT_SIZE)
 
@@ -125,35 +127,32 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
         }),
         createInitializeMintInstruction(
           mintKeypair.publicKey,
-          9, // 9 decimals
-          publicKey, // mint authority
-          formData.revokeFreeze ? null : publicKey // freeze authority
+          9,
+          publicKey,
+          formData.revokeFreeze ? null : publicKey
         )
       )
 
-      // Get latest blockhash
       const { blockhash } = await connection.getLatestBlockhash()
       transaction.recentBlockhash = blockhash
       transaction.feePayer = publicKey
 
-      // Sign transaction
       transaction.partialSign(mintKeypair)
       const signed = await signTransaction(transaction)
       
-      // Send transaction
       const txid = await connection.sendRawTransaction(signed.serialize())
       await connection.confirmTransaction(txid, 'confirmed')
 
       setRealTokenAddress(mintKeypair.publicKey.toString())
       
-      toast.success(`🎉 Token created! Address: ${mintKeypair.publicKey.toString().slice(0, 8)}...`, { 
+      toast.success(`🎉 Token Created! Address: ${mintKeypair.publicKey.toString().slice(0, 8)}...`, { 
         id: toastId,
-        duration: 6000 
+        duration: 8000 
       })
       
     } catch (error: any) {
-      console.error('❌ Error:', error)
-      toast.error(error.message || 'Failed to create token', { id: toastId })
+      console.error('❌ Creation failed:', error)
+      toast.error(error.message || 'Token creation failed', { id: toastId })
     } finally {
       setLoading(false)
     }
