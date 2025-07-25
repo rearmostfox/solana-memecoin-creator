@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-dark-100 text-white;
+  }
+}
+
+@layer components {
+  .glassmorphism {
+    @apply bg-dark-200/80 backdrop-blur-sm border border-dark-300/50;
+  }
+}
