@@ -4,9 +4,32 @@ import { useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { Connection, Transaction, SystemProgram, PublicKey, Keypair } from '@solana/web3.js'
 import { createInitializeMintInstruction, TOKEN_PROGRAM_ID, MINT_SIZE } from '@solana/spl-token'
-import { NFTStorage } from 'nft.storage'
-import ImageUpload from './ImageUpload'
 import toast from 'react-hot-toast'
+import ImageUpload from './ImageUpload'
+
+// 🎯 NEW: Simple IPFS upload function
+const uploadToIPFS = async (file: File): Promise<string> => {
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    
+    const response = await fetch('https://api.nft.storage/upload', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.NEXT_PUBLIC_NFT_STORAGE_KEY}`,
+      },
+      body: file
+    })
+    
+    if (!response.ok) throw new Error('Upload failed')
+    
+    const data = await response.json()
+    return data.value.cid
+  } catch (error) {
+    console.error('IPFS upload failed:', error)
+    throw error
+  }
+}
 
 interface TokenCreatorProps {
   balance: number
@@ -55,18 +78,19 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
     }
 
     setLoading(true)
+    let toastId = toast.loading('Uploading to IPFS...')
 
     try {
-      // Upload logo to IPFS
-      const client = new NFTStorage({ token: process.env.NFT_STORAGE_KEY! })
-      const cid = await client.storeBlob(formData.logo!)
-      
-      // Create metadata
+      // 🎯 STEP 1: Upload logo to IPFS
+      const logoCid = await uploadToIPFS(formData.logo)
+      const logoUrl = `https://ipfs.io/ipfs/${logoCid}`
+
+      // 🎯 STEP 2: Create metadata
       const metadata = {
         name: formData.name,
         symbol: formData.symbol,
         description: formData.description,
-        image: `https://nftstorage.link/ipfs/${cid}`,
+        image: logoUrl,
         extensions: {
           website: formData.website,
           twitter: formData.twitter,
@@ -76,12 +100,14 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
         }
       }
 
-      // Upload metadata
+      // 🎯 STEP 3: Upload metadata
       const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json' })
-      const metadataCid = await client.storeBlob(metadataBlob)
-      const metadataUri = `https://nftstorage.link/ipfs/${metadataCid}`
+      const metadataCid = await uploadToIPFS(metadataBlob as any)
+      const metadataUrl = `https://ipfs.io/ipfs/${metadataCid}`
 
-      // Create token on Solana
+      toast.loading('Creating token...', { id: toastId })
+
+      // 🎯 STEP 4: Create token on Solana
       const connection = new Connection(process.env.NEXT_PUBLIC_RPC_URL!)
       
       const mintKeypair = Keypair.generate()
@@ -110,15 +136,19 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
       transaction.partialSign(mintKeypair)
 
       const signed = await signTransaction(transaction)
-      const txid = await connection.sendRawTransaction(signed.serialize())
-      await connection.confirmTransaction(txid)
+      const txid = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed'
+      })
+      
+      await connection.confirmTransaction(txid, 'confirmed')
 
       setRealTokenAddress(mintKeypair.publicKey.toString())
-      toast.success('Token created successfully!')
+      toast.success(`Token created successfully! tx: ${txid.slice(0, 8)}...`, { id: toastId })
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating token:', error)
-      toast.error('Failed to create token')
+      toast.error(error.message || 'Failed to create token', { id: toastId })
     } finally {
       setLoading(false)
     }
@@ -172,97 +202,24 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
 
         <h3 className="text-lg font-semibold mt-6">Social Links</h3>
         <div className="space-y-3">
-          <input
-            type="url"
-            placeholder="Website URL"
-            value={formData.website}
-            onChange={(e) => setFormData({ ...formData, website: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
-          
-          <input
-            type="url"
-            placeholder="Twitter URL"
-            value={formData.twitter}
-            onChange={(e) => setFormData({ ...formData, twitter: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
-          
-          <input
-            type="url"
-            placeholder="Telegram URL"
-            value={formData.telegram}
-            onChange={(e) => setFormData({ ...formData, telegram: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
-          
-          <input
-            type="url"
-            placeholder="Discord URL"
-            value={formData.discord}
-            onChange={(e) => setFormData({ ...formData, discord: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
-          
-          <input
-            type="url"
-            placeholder="Extra Link"
-            value={formData.extraLink}
-            onChange={(e) => setFormData({ ...formData, extraLink: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
+          <input type="url" placeholder="Website URL" value={formData.website} onChange={(e) => setFormData({ ...formData, website: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Twitter URL" value={formData.twitter} onChange={(e) => setFormData({ ...formData, twitter: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Telegram URL" value={formData.telegram} onChange={(e) => setFormData({ ...formData, telegram: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Discord URL" value={formData.discord} onChange={(e) => setFormData({ ...formData, discord: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="url" placeholder="Extra Link" value={formData.extraLink} onChange={(e) => setFormData({ ...formData, extraLink: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
         </div>
 
         <h3 className="text-lg font-semibold mt-6">Revoke Authorities</h3>
         <div className="space-y-3">
-          <label className="flex items-center justify-between">
-            <span>Revoke Freeze Authority</span>
-            <input
-              type="checkbox"
-              checked={formData.revokeFreeze}
-              onChange={(e) => setFormData({ ...formData, revokeFreeze: e.target.checked })}
-              className="w-5 h-5 rounded bg-purple-600"
-            />
-          </label>
-          
-          <label className="flex items-center justify-between">
-            <span>Revoke Update Authority</span>
-            <input
-              type="checkbox"
-              checked={formData.revokeUpdate}
-              onChange={(e) => setFormData({ ...formData, revokeUpdate: e.target.checked })}
-              className="w-5 h-5 rounded bg-purple-600"
-            />
-          </label>
-          
-          <label className="flex items-center justify-between">
-            <span>Revoke Mint Authority</span>
-            <input
-              type="checkbox"
-              checked={formData.revokeMint}
-              onChange={(e) => setFormData({ ...formData, revokeMint: e.target.checked })}
-              className="w-5 h-5 rounded bg-purple-600"
-            />
-          </label>
+          <label className="flex items-center justify-between"><span>Revoke Freeze Authority</span><input type="checkbox" checked={formData.revokeFreeze} onChange={(e) => setFormData({ ...formData, revokeFreeze: e.target.checked })} className="w-5 h-5 rounded bg-purple-600" /></label>
+          <label className="flex items-center justify-between"><span>Revoke Update Authority</span><input type="checkbox" checked={formData.revokeUpdate} onChange={(e) => setFormData({ ...formData, revokeUpdate: e.target.checked })} className="w-5 h-5 rounded bg-purple-600" /></label>
+          <label className="flex items-center justify-between"><span>Revoke Mint Authority</span><input type="checkbox" checked={formData.revokeMint} onChange={(e) => setFormData({ ...formData, revokeMint: e.target.checked })} className="w-5 h-5 rounded bg-purple-600" /></label>
         </div>
 
         <h3 className="text-lg font-semibold mt-6">Dex Display Info (Fake)</h3>
         <div className="space-y-3">
-          <input
-            type="text"
-            placeholder="Fake Creator Address"
-            value={formData.fakeCreator}
-            onChange={(e) => setFormData({ ...formData, fakeCreator: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
-          
-          <input
-            type="text"
-            placeholder="Fake Token Address (add 'pump' at end)"
-            value={formData.fakeTokenAddress}
-            onChange={(e) => setFormData({ ...formData, fakeTokenAddress: e.target.value })}
-            className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500"
-          />
+          <input type="text" placeholder="Fake Creator Address" value={formData.fakeCreator} onChange={(e) => setFormData({ ...formData, fakeCreator: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
+          <input type="text" placeholder="Fake Token Address (add 'pump' at end)" value={formData.fakeTokenAddress} onChange={(e) => setFormData({ ...formData, fakeTokenAddress: e.target.value })} className="w-full bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 focus:outline-none focus:border-purple-500" />
         </div>
 
         {realTokenAddress && (
@@ -270,29 +227,14 @@ export default function TokenCreator({ balance, connected }: TokenCreatorProps) 
             <h4 className="font-semibold mb-2">Real Token Address:</h4>
             <div className="flex items-center gap-2">
               <code className="text-sm break-all">{realTokenAddress}</code>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(realTokenAddress)
-                  toast.success('Copied to clipboard!')
-                }}
-                className="px-3 py-1 bg-purple-600 rounded text-sm hover:bg-purple-700"
-              >
-                Copy
-              </button>
+              <button onClick={() => { navigator.clipboard.writeText(realTokenAddress); toast.success('Copied!'); }} className="px-3 py-1 bg-purple-600 rounded text-sm hover:bg-purple-700">Copy</button>
             </div>
           </div>
         )}
 
         <div className="mt-8 flex items-center justify-between">
-          <div className="text-sm text-dark-400">
-            Estimated fee: ~0.02 SOL
-          </div>
-          
-          <button
-            onClick={handleCreateToken}
-            disabled={loading || !connected}
-            className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <div className="text-sm text-dark-400">Estimated fee: ~0.02 SOL</div>
+          <button onClick={handleCreateToken} disabled={loading || !connected} className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed">
             {loading ? 'Creating...' : 'Create Token'}
           </button>
         </div>
